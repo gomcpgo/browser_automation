@@ -153,3 +153,8 @@ Persistent injected CSS/JS across navigations, full-page scroll-and-stitch, view
 fused capture-on-condition, typing-animation frames, burst capture, synthetic cursor overlay, video.
 Iframe contents are not addressable: the `<iframe>` element itself appears in snapshots and
 `get_element`, but selectors do not reach inside it.
+
+**Known issues are listed in `docs/implementation-plan.md` under "Caveats and known issues"** — the
+two to be aware of before using this on a real app are that an unhandled `alert()`/`confirm()` stalls
+the session (and `wait_for`'s timeout will not rescue it), and that a page-initiated reload silently
+drops the session zoom.

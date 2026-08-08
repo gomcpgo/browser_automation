@@ -1,7 +1,10 @@
 # Browser Automation MCP Server — Implementation Plan
 
-**Status:** Phase 1 built. All 15 tools implemented and covered by tests; see `../README.md`.
-**Date:** 2026-08-08
+**Status:** Phase 1 built and working. All 15 tools implemented, `go test ./...` green (unit +
+13 fixture-driven integration tests against real headless Chrome), acceptance checklist met — see
+[Build status](#build-status) for what changed against this plan and
+[Caveats and known issues](#caveats-and-known-issues) for the limits that came out of the build.
+**Date:** 2026-08-08 (planned and built)
 
 A Go MCP server that gives an LLM direct browser control for two use cases:
 
@@ -99,9 +102,13 @@ browser_automation/
 
 **Phase 2 — demo polish:**
 - Persistent injected CSS/JS, re-applied on every navigation (devtools-button hiding)
-- Full-page scroll-and-stitch capture
+- Full-page scroll-and-stitch capture (also fixes caveat 4, viewport-clipped element capture)
 - Named viewport presets
 - Capture-on-condition as one fused call (`wait_for` + `screenshot`)
+
+**Robustness, promoted out of the build (see [Caveats and known issues](#caveats-and-known-issues)):**
+- Dialog handling + per-call page timeouts, so an `alert()` cannot stall the session (caveat 1)
+- Always re-apply the effective zoom before capture (caveat 2)
 
 **Phase 3 — deferred (complex demo captures):**
 - Typing animation frames ("type over N ms, frame every X%")
@@ -188,12 +195,119 @@ All verified by `go test ./test/`, one test per item:
 - [x] `get_element` on the hidden dropdown reports `display: none`.
       — `TestHiddenElementReportsReason`
 
-### Notes from the build
+## Build status
 
-- `EvalOnNewDocument` takes a *script*, not a function expression: the console patch has to be
-  wrapped in an IIFE there, unlike `page.Eval`.
-- Console arguments are captured by patching `console.*` in the page and forwarding a serialized
-  payload through a CDP binding (`Runtime.addBinding`), rather than reading remote object previews.
-  That is what makes nested objects readable.
-- Response bodies must be fetched when `Network.loadingFinished` fires; asking for them later, after
-  a navigation, is too late. They are buffered eagerly for text responses up to 64KB.
+Everything in Phase 1 shipped: all 15 tools, the package layout above, unit tests, fixture-based
+integration tests and terminal mode. Nothing was dropped. `go test ./...`, `go vet ./...` and
+`gofmt -l .` are clean; `./run.sh demo` exercises the whole flow against the bundled fixture.
+
+### How things were actually implemented
+
+- **Console capture** patches `console.log/info/warn/debug/error` in the page and forwards a
+  serialized payload through a CDP binding (`Runtime.addBinding` + `Page.addScriptToEvaluateOnNewDocument`),
+  rather than reading remote-object previews. That is what makes nested objects readable. Uncaught
+  exceptions come in separately via `Runtime.exceptionThrown` and are recorded at level `error`.
+- **`EvalOnNewDocument` takes a *script*, not a function expression** — unlike `page.Eval`. The patch
+  has to be wrapped in an IIFE there. Getting this wrong fails silently: the binding exists, the
+  patch never runs, and the console buffer just stays empty. This was the one real bug in the build.
+- **Response bodies are fetched eagerly** when `Network.loadingFinished` fires, from a separate
+  goroutine (calling CDP from inside the event-loop callback would deadlock). Asking for a body later,
+  after a navigation, is too late — Chrome has dropped it.
+- **`snapshot` emits only meaningful elements** — interactive, headings, elements with their own text,
+  `img`, `iframe` — and skips wrapper divs, recursing without emitting so the indent stays a clean
+  outline. Capped at 300 nodes, text truncated to 80 chars.
+- **Selector suggestion** tries, in order: unique `#id`, then a unique
+  `tag[data-testid|data-test-id|data-test|name|aria-label|placeholder="..."]`, then a unique
+  `tag.class.combo`, then a positional `tag:nth-of-type(n) > ...` path. Uniqueness is verified with
+  `querySelectorAll(...).length === 1` before a selector is offered.
+
+### Deviations from the plan
+
+| Area | Plan | Built | Why |
+|---|---|---|---|
+| Ambiguous selectors | not specified | first match is used, `match_count` returned | Playwright's strict mode was listed as friction in `capture-tool-requests.md`; reporting beats erroring |
+| `get_element` | text, attributes, bounds, visibility, styles | also `hidden_by` naming the cause | Directly answers the "Export button mystery"; `display`/`visibility`/`opacity` are always returned |
+| Terminal mode | four example flags | added `-serve-fixtures`, `-wait-after`, `-body`, `-url-pattern` | Flags run in a fixed order, so a post-interaction wait needs its own flag; console and request filters needed separating |
+| Fixture serving | `run.sh serve-fixture` | same, plus the fixture is a Go package embedding the HTML | One definition shared by `httptest` in the tests and the terminal flag |
+
+### Defaults and limits chosen during the build
+
+- `wait_for`: `timeout_ms` 10000, `idle_ms` 500, polled every 100ms.
+- `get_console`: `max_results` 50, `expand_depth` 5. Page-side serialization caps at depth 8,
+  60 keys per object, 100 array items, 2000 chars per string — `expand_depth` can trim below that
+  but never recover beyond it.
+- `get_requests`: `max_results` 20, bodies buffered for text responses up to 64KB.
+- Buffers: 1000 console entries and 500 requests, oldest evicted.
+- `start_session`: 1280×800, headless, zoom 1, `DeviceScaleFactor` 1 (zoom, not DPR, is the
+  sharpness lever).
+
+## Caveats and known issues
+
+Ordered by how likely they are to bite.
+
+### 1. An unhandled JS dialog stalls the session (no workaround in v1)
+
+`alert()`, `confirm()` or `prompt()` blocks the page, and every later tool call blocks with it —
+**including `wait_for`, whose `timeout_ms` does not fire**, because the poll's `Eval` never returns.
+Verified: a call issued after an `alert()` was still hanging 15s later. There is no dialog handler
+and no per-call CDP timeout. Fix when it matters: register `page.HandleDialog` at session start
+(auto-dismiss, and report dialogs through `get_console`), and give each tool call a bounded page
+timeout.
+
+### 2. Session zoom is lost on a page-initiated reload
+
+`navigate` re-applies zoom, and SPA route changes (`history.pushState`) keep it, but if the app
+itself reloads the document the zoom resets to 1 while the session still believes it is 2. The
+per-shot zoom in `screenshot` compares against the session value, so it skips re-applying and the
+capture comes back at 1×. Verified with `location.reload()`. Fix: have `screenshot` always apply the
+effective zoom before capturing instead of comparing.
+
+### 3. `evaluate` takes an expression, not statements
+
+The JS is wrapped as `() => (your_js)`, so `const x = 1; return x` is a syntax error. Multi-statement
+code must be an IIFE: `(() => { const x = 1; return x })()`. Works, but it is not obvious from the
+tool description.
+
+### 4. Element capture is clipped to the viewport
+
+An element taller or wider than the viewport is cut off — capturing `body` on the fixture (1680px
+tall in an 800px viewport) returns 1280×800, not the full page. Full-page capture is Phase 2
+(scroll-and-stitch); until then, size the viewport to the content or capture in sections.
+
+### 5. Iframe contents are not addressable
+
+Selectors only run in the main frame, so `click`/`get_element`/`screenshot` cannot reach inside an
+`<iframe>`; the frame element itself appears in `snapshot` (with its `src`) and in `get_element`.
+Pinned by `TestIframeBehaviour`. Console output *is* captured from same-origin iframes (verified —
+the injected script applies to every frame in the target). Cross-origin (out-of-process) iframes and
+web workers are separate CDP targets and are expected not to be captured; not verified.
+
+### 6. Buffer and capture gaps
+
+- A response body is fetched asynchronously after `loadingFinished`, so `get_requests` called
+  immediately after an action may return the record without its body. Wait for the condition first.
+- Binary (base64) bodies and anything over 64KB are skipped; the request metadata is still recorded.
+- Responses served from Chrome's memory cache may never produce a body.
+- `network_idle` only knows about CDP network events. WebSocket traffic is invisible to it, and a
+  page that polls on a timer never goes idle.
+- `console_matches` searches the whole buffer by default, so a stale match from earlier in the
+  session satisfies the wait instantly. Scope it with `since_ms` when that matters.
+- Regexes are Go RE2: no lookahead or backreferences.
+
+### 7. One page, one caller
+
+The session holds a single page. New tabs and `window.open` popups are not tracked, and downloads
+are not handled. The handler mutex guards the session pointer, not the page: concurrent tool calls
+would drive the same page at once. MCP calls are sequential in practice, so this has not been an
+issue.
+
+### 8. Smaller sharp edges
+
+- `press_key` only accepts keys in rod's keymap (an unknown name is a clear error). Combos hold all
+  but the last key, then type the last.
+- `type_text` with `clear` uses select-all then insert; a custom editor that ignores `insertText`
+  will not clear.
+- `rect` coordinates are viewport CSS pixels *after* zoom is applied — zoom reflows layout, so
+  locate the region at the zoom you intend to capture at.
+- Applying zoom sleeps 150ms for reflow, so a zoomed screenshot costs ~300ms extra.
+- If Chrome is not installed, rod downloads one on first launch, which makes that run slow.
