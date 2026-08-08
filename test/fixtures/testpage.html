@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Browser Automation Fixture</title>
+  <style>
+    body { margin: 0; padding: 20px; font-family: Arial, Helvetica, sans-serif; }
+    #dropdown { display: none; border: 1px solid #999; padding: 8px; width: 200px; }
+    #detail { width: 200px; height: 60px; font-size: 9px; line-height: 12px;
+              border: 1px solid #333; padding: 4px; box-sizing: border-box; }
+    #tall { margin-top: 1200px; padding: 20px; background: #eef; }
+    iframe { width: 300px; height: 80px; }
+  </style>
+</head>
+<body>
+  <h1 id="title">Fixture Page</h1>
+
+  <!-- Delayed text: proves wait_for beats a fixed timeout -->
+  <p id="status">Loading...</p>
+
+  <!-- Interactive elements -->
+  <input id="name-input" type="text" placeholder="Your name">
+  <button id="toggle-dropdown">Toggle dropdown</button>
+  <div id="dropdown">Dropdown contents</div>
+
+  <!-- Network -->
+  <button id="fetch-btn">Fetch data</button>
+  <p id="fetch-result"></p>
+
+  <!-- High-detail region: proves the zoom sharpness lever -->
+  <div id="detail">
+    Tiny text for sharpness checks. The quick brown fox jumps over the lazy dog,
+    then does it again at nine point type.
+  </div>
+
+  <iframe id="inner" src="frame.html"></iframe>
+
+  <!-- Below the fold: proves scroll + element screenshot -->
+  <div id="tall">
+    <h2 id="tall-heading">Below the fold</h2>
+    <p>This section starts far below the initial viewport.</p>
+  </div>
+
+  <script>
+    // Object logging: proves get_console expands objects
+    console.log('event', { type: 'credit:balance:changed', data: { balance: 488, currency: 'USD' } });
+
+    setTimeout(function () {
+      document.getElementById('status').textContent = 'Ready';
+      console.log('status changed', { from: 'Loading...', to: 'Ready' });
+    }, 2000);
+
+    document.getElementById('toggle-dropdown').addEventListener('click', function () {
+      var d = document.getElementById('dropdown');
+      d.style.display = d.style.display === 'block' ? 'none' : 'block';
+    });
+
+    document.getElementById('fetch-btn').addEventListener('click', function () {
+      fetch('/api/test')
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          document.getElementById('fetch-result').textContent = 'got ' + data.items.length + ' items';
+          console.log('fetch complete', data);
+        });
+    });
+  </script>
+</body>
+</html>
