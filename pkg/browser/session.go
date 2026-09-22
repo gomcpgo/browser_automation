@@ -2,7 +2,6 @@ package browser
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -16,10 +15,11 @@ import (
 
 // Options configures a browser session.
 type Options struct {
-	Width  int
-	Height int
-	Headed bool
-	Zoom   float64
+	Width      int
+	Height     int
+	Headed     bool
+	Zoom       float64
+	ChromePath string
 }
 
 // Session is one persistent browser + page. Console and network listeners are
@@ -46,7 +46,9 @@ func Start(opts Options) (*Session, error) {
 	}
 
 	l := launcher.New().Headless(!opts.Headed)
-	if bin, exists := launcher.LookPath(); exists {
+	if opts.ChromePath != "" {
+		l = l.Bin(opts.ChromePath)
+	} else if bin, exists := launcher.LookPath(); exists {
 		l = l.Bin(bin)
 	}
 	controlURL, err := l.Launch()
@@ -112,8 +114,21 @@ func (s *Session) Close() error {
 	return err
 }
 
-// Page exposes the live page for the snapshot and capture packages.
-func (s *Session) Page() *rod.Page { return s.page }
+// opTimeout bounds a single tool call, and navTimeout a navigation. Without a
+// bound, anything that blocks the page (a JS dialog, a runaway script) would
+// hang the caller forever.
+const (
+	opTimeout  = 30 * time.Second
+	navTimeout = 60 * time.Second
+
+	// waitGrace lets the wait loop notice its own deadline before the page
+	// context cuts the in-flight poll short.
+	waitGrace = 500 * time.Millisecond
+)
+
+// Page exposes the live page, bounded by the per-call timeout, for the snapshot
+// and capture packages.
+func (s *Session) Page() *rod.Page { return s.page.Timeout(opTimeout) }
 
 // Monitor exposes the event buffers.
 func (s *Session) Monitor() *monitor.Monitor { return s.mon }
@@ -138,25 +153,38 @@ func (s *Session) Info() map[string]interface{} {
 
 // Navigate loads a URL, waits for the load event and re-applies session zoom.
 func (s *Session) Navigate(url string) error {
-	if err := s.page.Navigate(url); err != nil {
+	page := s.page.Timeout(navTimeout)
+
+	if err := page.Navigate(url); err != nil {
 		return fmt.Errorf("navigation failed: %w", err)
 	}
-	if err := s.page.WaitLoad(); err != nil {
+	if err := page.WaitLoad(); err != nil {
 		return fmt.Errorf("page load failed: %w", err)
 	}
 	return s.ApplyZoom(s.opts.Zoom)
 }
 
-// ApplyZoom sets the page zoom, the documented sharpness lever. Layout reflows,
-// so callers must locate elements after zooming.
+// ApplyZoom sets the page zoom, the documented sharpness lever. It is
+// idempotent: a page that already carries the zoom is left alone, so the reflow
+// pause is only paid when the zoom actually changes. Layout reflows, so callers
+// must locate elements after zooming.
 func (s *Session) ApplyZoom(zoom float64) error {
 	if zoom <= 0 {
 		zoom = 1
 	}
-	js := fmt.Sprintf(`() => { document.documentElement.style.zoom = %q; }`, fmt.Sprintf("%g", zoom))
-	if _, err := s.page.Eval(js); err != nil {
+
+	obj, err := s.Page().Eval(`(want) => {
+		if (document.documentElement.style.zoom === want) return true;
+		document.documentElement.style.zoom = want;
+		return false;
+	}`, fmt.Sprintf("%g", zoom))
+	if err != nil {
 		return fmt.Errorf("failed to apply zoom: %w", err)
 	}
+	if obj.Value.Bool() {
+		return nil
+	}
+
 	// Give the browser a frame to reflow at the new zoom.
 	time.Sleep(150 * time.Millisecond)
 	return nil
@@ -164,40 +192,28 @@ func (s *Session) ApplyZoom(zoom float64) error {
 
 // Eval runs a JS expression and returns its JSON value.
 func (s *Session) Eval(js string) (interface{}, error) {
-	obj, err := s.page.Eval(fmt.Sprintf(`() => (%s)`, js))
+	obj, err := s.Page().Eval(fmt.Sprintf(`() => (%s)`, js))
 	if err != nil {
 		return nil, fmt.Errorf("evaluate failed: %w", err)
 	}
 	return obj.Value.Val(), nil
 }
 
-// evalRaw runs a full JS function expression as given.
-func (s *Session) evalRaw(js string) (interface{}, error) {
-	obj, err := s.page.Eval(js)
-	if err != nil {
-		return nil, err
-	}
-	return obj.Value.Val(), nil
-}
-
-// evalInto runs a full JS function expression and decodes the result into out.
-func (s *Session) evalInto(js string, out interface{}) error {
-	obj, err := s.page.Eval(js)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal([]byte(obj.Value.JSON("", "")), out)
-}
-
-// WaitFor blocks until the condition is met or the timeout expires.
+// WaitFor blocks until the condition is met or the timeout expires. The wait's
+// own deadline is pushed down into the page, so a blocked page fails the wait on
+// time instead of hanging past it.
 func (s *Session) WaitFor(ctx context.Context, p monitor.WaitParams) (int, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, time.Duration(p.TimeoutMs)*time.Millisecond+waitGrace)
+	defer cancel()
+
+	page := s.page.Context(waitCtx)
 	eval := func(js string) (bool, error) {
-		v, err := s.evalRaw(js)
+		obj, err := page.Eval(js)
 		if err != nil {
 			return false, err
 		}
-		b, _ := v.(bool)
-		return b, nil
+		v, _ := obj.Value.Val().(bool)
+		return v, nil
 	}
 	return monitor.Wait(ctx, s.mon, eval, p)
 }

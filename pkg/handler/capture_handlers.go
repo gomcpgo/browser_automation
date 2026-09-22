@@ -32,12 +32,18 @@ func (h *Handler) handleScreenshot(args map[string]interface{}) (*protocol.CallT
 		return errorResponse(err)
 	}
 
-	// A per-shot zoom reflows the page, so apply it before locating elements
-	// and restore the session zoom afterwards.
-	if zoom > 0 && zoom != sess.Zoom() {
-		if err := sess.ApplyZoom(zoom); err != nil {
-			return errorResponse(err)
-		}
+	// Apply the zoom unconditionally rather than trusting the session value: a
+	// page that reloaded itself has dropped the zoom, and comparing would skip
+	// re-applying it and capture at 1x. ApplyZoom is idempotent and reflows the
+	// page, so it also has to run before elements are located.
+	effective := zoom
+	if effective <= 0 {
+		effective = sess.Zoom()
+	}
+	if err := sess.ApplyZoom(effective); err != nil {
+		return errorResponse(err)
+	}
+	if effective != sess.Zoom() {
 		defer sess.ApplyZoom(sess.Zoom())
 	}
 

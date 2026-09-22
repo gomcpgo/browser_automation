@@ -106,9 +106,10 @@ browser_automation/
 - Named viewport presets
 - Capture-on-condition as one fused call (`wait_for` + `screenshot`)
 
-**Robustness, promoted out of the build (see [Caveats and known issues](#caveats-and-known-issues)):**
-- Dialog handling + per-call page timeouts, so an `alert()` cannot stall the session (caveat 1)
-- Always re-apply the effective zoom before capture (caveat 2)
+**Robustness, done (see [Caveats and known issues](#caveats-and-known-issues)):**
+- ~~Dialog handling + per-call page timeouts, so an `alert()` cannot stall the session~~ — fixed,
+  caveat 1; one residual gap on mouse-driven calls is documented there
+- ~~Always re-apply the effective zoom before capture~~ — fixed, caveat 2
 
 **Phase 3 — deferred (complex demo captures):**
 - Typing animation frames ("type over N ms, frame every X%")
@@ -240,27 +241,66 @@ integration tests and terminal mode. Nothing was dropped. `go test ./...`, `go v
 - Buffers: 1000 console entries and 500 requests, oldest evicted.
 - `start_session`: 1280×800, headless, zoom 1, `DeviceScaleFactor` 1 (zoom, not DPR, is the
   sharpness lever).
+- Call bounds: 30s per tool call, 60s for `navigate`, and `wait_for` runs against its own
+  `timeout_ms` plus a 500ms grace so the loop reports the timeout before the page context cuts the
+  in-flight poll short.
+- JS dialogs are dismissed on sight and reported at level `warn` in the console buffer.
+
+### Configuration
+
+One environment variable, `BROWSER_AUTOMATION_CHROME_PATH`, validated at startup so a bad value
+fails immediately rather than at the first `start_session`; unset means rod auto-detects. Deliberately
+*not* configurable: viewport size, `headed` and `zoom` are already `start_session` parameters and env
+defaults would be a second source of truth for the same setting; call timeouts, buffer sizes and the
+body cap are backstops with no evidence anyone needs to tune them; and an output directory or
+allowlist would defeat the point of `screenshot` taking an arbitrary absolute path.
+
+A persistent Chrome profile (`user-data-dir`) was considered and left out for now. It would let a
+logged-in session survive across runs, which matters for testing or capturing an app behind SSO —
+worth revisiting the first time that bites.
 
 ## Caveats and known issues
 
-Ordered by how likely they are to bite.
+Ordered by how likely they are to bite. Items 1 and 2 were found during the build and have since
+been fixed; they are kept here with what changed, because the failure modes are worth knowing.
 
-### 1. An unhandled JS dialog stalls the session (no workaround in v1)
+### 1. JS dialogs — FIXED, with one residual gap
 
-`alert()`, `confirm()` or `prompt()` blocks the page, and every later tool call blocks with it —
-**including `wait_for`, whose `timeout_ms` does not fire**, because the poll's `Eval` never returns.
-Verified: a call issued after an `alert()` was still hanging 15s later. There is no dialog handler
-and no per-call CDP timeout. Fix when it matters: register `page.HandleDialog` at session start
-(auto-dismiss, and report dialogs through `get_console`), and give each tool call a bounded page
-timeout.
+*Was:* `alert()`, `confirm()` or `prompt()` blocked the page and every later tool call with it,
+including `wait_for`, whose `timeout_ms` never fired because the poll's `Eval` never returned. A call
+issued after an `alert()` was still hanging 15 seconds later.
 
-### 2. Session zoom is lost on a page-initiated reload
+*Now:* dialogs are dismissed automatically — `Page.javascriptDialogOpening` is handled at session
+start with `Accept: false` (Playwright's default) — and each dismissal is recorded in the console
+buffer as `[warn] dialog dismissed (alert): <message>`, so nothing is silently swallowed. Covered by
+`TestDialogDoesNotStallSession`.
 
-`navigate` re-applies zoom, and SPA route changes (`history.pushState`) keep it, but if the app
-itself reloads the document the zoom resets to 1 while the session still believes it is 2. The
-per-shot zoom in `screenshot` compares against the session value, so it skips re-applying and the
-capture comes back at 1×. Verified with `location.reload()`. Fix: have `screenshot` always apply the
-effective zoom before capturing instead of comparing.
+Belt and braces, tool calls are now bounded: 30s per call, 60s for `navigate`, and `wait_for` pushes
+its own deadline down into the page so a blocked page fails the wait on time with the normal
+"timed out after Nms" message. Measured against a deliberately unhandled dialog: `wait_for(3000ms)`
+returned at 3.5s, `evaluate` and `get_element` returned `context deadline exceeded` at the bound.
+
+**Residual gap:** the bound does *not* cover mouse-driven calls — `click`, `hover` and delta
+`scroll`. rod's `Page.Context()` clones the page shallowly, so `page.Mouse` keeps pointing at the
+original unbounded page and `Input.dispatchMouseEvent` ignores the clone's deadline (confirmed from
+a stack trace: `Mouse.Up` parked indefinitely). With dialogs auto-dismissed this no longer has a
+known trigger, but a click handler that blocks the renderer some other way — an infinite loop, say —
+would still hang that call. Closing it properly needs either a watchdog goroutine per tool call
+(which risks a stray click landing later) or bypassing rod's `Mouse`; neither is worth it until
+something actually hits it.
+
+### 2. Session zoom on a page-initiated reload — FIXED
+
+*Was:* `navigate` re-applied zoom and SPA route changes (`history.pushState`) kept it, but if the app
+reloaded the document itself the zoom reset to 1 while the session still believed it was 2. The
+per-shot zoom in `screenshot` compared against the session value, skipped re-applying, and the
+capture came back at 1× with nothing to indicate it.
+
+*Now:* `screenshot` always applies the effective zoom before capturing rather than comparing against
+the session value, and `ApplyZoom` is idempotent — it reads the current value first and only pays
+the 150ms reflow pause when the zoom actually changes. Covered by
+`TestZoomSurvivesPageInitiatedReload` (session zoom 2, no per-shot zoom, capture across a
+`location.reload()`); that test fails with `400 then 200` against the old comparison logic.
 
 ### 3. `evaluate` takes an expression, not statements
 

@@ -20,6 +20,12 @@ import (
 // It skips the test when Chrome is not installed.
 func setup(t *testing.T) (*mcpHandler.Handler, string) {
 	t.Helper()
+	return setupZoom(t, 1)
+}
+
+// setupZoom is setup with an explicit session zoom.
+func setupZoom(t *testing.T, zoom float64) (*mcpHandler.Handler, string) {
+	t.Helper()
 
 	if _, found := launcher.LookPath(); !found {
 		t.Skip("Chrome not installed; skipping browser integration tests")
@@ -28,11 +34,11 @@ func setup(t *testing.T) (*mcpHandler.Handler, string) {
 	srv := httptest.NewServer(fixtures.Handler())
 	t.Cleanup(srv.Close)
 
-	h := mcpHandler.New()
+	h := mcpHandler.New("")
 	t.Cleanup(h.Shutdown)
 
 	call(t, h, "start_session", map[string]interface{}{
-		"width": float64(1200), "height": float64(800),
+		"width": float64(1200), "height": float64(800), "zoom": zoom,
 	})
 	call(t, h, "navigate", map[string]interface{}{"url": srv.URL})
 
@@ -345,12 +351,66 @@ func TestIframeBehaviour(t *testing.T) {
 	}
 }
 
+// TestDialogDoesNotStallSession covers caveat 1: an unhandled alert used to
+// block the page and every later tool call, including wait_for's own timeout.
+func TestDialogDoesNotStallSession(t *testing.T) {
+	h, _ := setup(t)
+
+	call(t, h, "click", map[string]interface{}{"selector": "#alert-btn"})
+
+	// The dialog is dismissed, so the click handler runs to completion...
+	call(t, h, "wait_for", map[string]interface{}{
+		"condition": "text_visible", "text": "alert closed", "timeout_ms": float64(10000),
+	})
+
+	// ...later calls still work...
+	res := decode(t, call(t, h, "evaluate", map[string]interface{}{"js": "1 + 1"}))
+	if res["value"] != float64(2) {
+		t.Fatalf("expected the session to keep working after a dialog, got %v", res["value"])
+	}
+
+	// ...and the dismissed dialog is reported rather than swallowed.
+	out := call(t, h, "get_console", map[string]interface{}{"pattern": "dialog"})
+	if !strings.Contains(out, "blocking dialog") {
+		t.Fatalf("expected the dialog message in the console buffer: %s", out)
+	}
+}
+
+// TestZoomSurvivesPageInitiatedReload covers caveat 2: the page dropping the
+// zoom on its own reload used to yield a silent 1x capture.
+func TestZoomSurvivesPageInitiatedReload(t *testing.T) {
+	// Session zoom 2 with no per-shot zoom is the case that used to break: the
+	// shot zoom matched the session value, so re-applying it looked unnecessary.
+	h, _ := setupZoom(t, 2)
+	dir := t.TempDir()
+
+	before := decode(t, call(t, h, "screenshot", map[string]interface{}{
+		"output_path": filepath.Join(dir, "before.png"), "selector": "#detail",
+	}))
+	if w, _ := before["width"].(float64); w != 400 {
+		t.Fatalf("expected the 200px element captured at 2x, got %v", w)
+	}
+
+	call(t, h, "click", map[string]interface{}{"selector": "#reload-btn"})
+	call(t, h, "wait_for", map[string]interface{}{
+		"condition": "text_visible", "text": "Ready", "timeout_ms": float64(15000),
+	})
+
+	after := decode(t, call(t, h, "screenshot", map[string]interface{}{
+		"output_path": filepath.Join(dir, "after.png"), "selector": "#detail",
+	}))
+	if before["width"] != after["width"] {
+		t.Fatalf("zoom lost across a page-initiated reload: %v then %v",
+			before["width"], after["width"])
+	}
+}
+
 func TestToolsRequireSession(t *testing.T) {
 	if _, found := launcher.LookPath(); !found {
 		t.Skip("Chrome not installed; skipping browser integration tests")
 	}
 
-	h := mcpHandler.New()
+	h := mcpHandler.New("")
 	msg := callExpectingError(t, h, "snapshot", map[string]interface{}{})
 	if !strings.Contains(msg, "start_session") {
 		t.Fatalf("expected a start_session hint, got %s", msg)

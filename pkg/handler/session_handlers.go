@@ -31,10 +31,11 @@ func (h *Handler) handleStartSession(args map[string]interface{}) (*protocol.Cal
 	h.mu.Unlock()
 
 	sess, err := browser.Start(browser.Options{
-		Width:  width,
-		Height: height,
-		Headed: headed,
-		Zoom:   zoom,
+		Width:      width,
+		Height:     height,
+		Headed:     headed,
+		Zoom:       zoom,
+		ChromePath: h.chromePath,
 	})
 	if err != nil {
 		return errorResponse(err)

@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/gomcpgo/browser_automation/pkg/browser"
 	mcpHandler "github.com/gomcpgo/browser_automation/pkg/handler"
 	"github.com/gomcpgo/browser_automation/test/fixtures"
 
@@ -79,7 +80,12 @@ func main() {
 		log.Fatal(http.ListenAndServe(serveFixtures, fixtures.Handler()))
 	}
 
-	h := mcpHandler.New()
+	chromePath, err := browser.ChromePathFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	h := mcpHandler.New(chromePath)
 	ctx := context.Background()
 
 	terminalMode := navigate != "" || doSnapshot || element != "" || eval != "" || click != "" ||

@@ -27,6 +27,13 @@
   <button id="fetch-btn">Fetch data</button>
   <p id="fetch-result"></p>
 
+  <!-- Blocking dialog: proves the session is not stalled by an alert -->
+  <button id="alert-btn">Show alert</button>
+  <p id="alert-result"></p>
+
+  <!-- Page-initiated reload: proves session zoom is restored afterwards -->
+  <button id="reload-btn">Reload page</button>
+
   <!-- High-detail region: proves the zoom sharpness lever -->
   <div id="detail">
     Tiny text for sharpness checks. The quick brown fox jumps over the lazy dog,
@@ -53,6 +60,15 @@
     document.getElementById('toggle-dropdown').addEventListener('click', function () {
       var d = document.getElementById('dropdown');
       d.style.display = d.style.display === 'block' ? 'none' : 'block';
+    });
+
+    document.getElementById('alert-btn').addEventListener('click', function () {
+      alert('blocking dialog');
+      document.getElementById('alert-result').textContent = 'alert closed';
+    });
+
+    document.getElementById('reload-btn').addEventListener('click', function () {
+      location.reload();
     });
 
     document.getElementById('fetch-btn').addEventListener('click', function () {

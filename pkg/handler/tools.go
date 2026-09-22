@@ -15,7 +15,9 @@ func (h *Handler) GetTools() []protocol.Tool {
 				"subsequent tool calls, and console/network capture begins immediately, so " +
 				"get_console, get_requests and wait_for see the full history. Call this first. " +
 				"Use zoom (not viewport size) to make screenshots sharper: zoom re-renders the page " +
-				"at that scale, so a 2x zoom element screenshot has 2x the pixels.",
+				"at that scale, so a 2x zoom element screenshot has 2x the pixels. " +
+				"JavaScript dialogs (alert/confirm/prompt) are dismissed automatically so they cannot " +
+				"block the page; each one is reported in get_console at level warn.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {

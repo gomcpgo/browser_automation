@@ -34,6 +34,10 @@ func (s *Session) attachListeners() error {
 	if err := (proto.NetworkEnable{}).Call(s.page); err != nil {
 		return fmt.Errorf("failed to enable network events: %w", err)
 	}
+	// Page events carry the dialog notifications handled below.
+	if err := (proto.PageEnable{}).Call(s.page); err != nil {
+		return fmt.Errorf("failed to enable page events: %w", err)
+	}
 
 	go s.page.EachEvent(
 		func(e *proto.RuntimeBindingCalled) {
@@ -60,6 +64,9 @@ func (s *Session) attachListeners() error {
 		func(e *proto.NetworkLoadingFailed) {
 			s.mon.RequestFailed(string(e.RequestID), e.ErrorText)
 		},
+		func(e *proto.PageJavascriptDialogOpening) {
+			go s.dismissDialog(e)
+		},
 	)()
 
 	return nil
@@ -76,6 +83,19 @@ func (s *Session) onConsolePayload(payload string) {
 		return
 	}
 	s.mon.AddConsole(msg.Level, msg.Args)
+}
+
+// dismissDialog closes a JS dialog and records it. An unhandled alert, confirm
+// or prompt blocks the page and every later tool call with it, so dialogs are
+// always dismissed; the message shows up in get_console so it is not lost.
+func (s *Session) dismissDialog(e *proto.PageJavascriptDialogOpening) {
+	err := proto.PageHandleJavaScriptDialog{Accept: false}.Call(s.page)
+
+	msg := fmt.Sprintf("dialog dismissed (%s): %s", e.Type, e.Message)
+	if err != nil {
+		msg = fmt.Sprintf("dialog (%s) could not be dismissed: %s: %v", e.Type, e.Message, err)
+	}
+	s.mon.AddConsole("warn", []interface{}{msg})
 }
 
 // captureBody stores a text response body so get_requests can return it later,

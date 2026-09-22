@@ -35,12 +35,28 @@ MCP client configuration:
 ```json
 {
   "mcpServers": {
-    "browser-automation": {
-      "command": "/absolute/path/to/browser_automation/bin/browser_automation"
+    "browser_automation": {
+      "command": "/absolute/path/to/browser_automation/bin/browser_automation",
+      "env": {
+        "BROWSER_AUTOMATION_CHROME_PATH": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+      }
     }
   }
 }
 ```
+
+## Configuration
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `BROWSER_AUTOMATION_CHROME_PATH` | no | Browser binary to launch. Unset means auto-detect, which downloads Chromium if nothing is installed. Set it to pin a specific browser (Chrome, Brave, Edge, Canary) or to avoid that download. |
+
+Point it at the executable, not the macOS `.app` bundle — the path must end in
+`Contents/MacOS/Google Chrome`. A missing path or a directory fails at startup with the reason, not
+later on the first `start_session`.
+
+Everything else is a per-call tool parameter: viewport size, `headed`, and `zoom` belong to
+`start_session`, and waits take their own `timeout_ms`.
 
 ## Tools
 
@@ -154,7 +170,7 @@ fused capture-on-condition, typing-animation frames, burst capture, synthetic cu
 Iframe contents are not addressable: the `<iframe>` element itself appears in snapshots and
 `get_element`, but selectors do not reach inside it.
 
-**Known issues are listed in `docs/implementation-plan.md` under "Caveats and known issues"** — the
-two to be aware of before using this on a real app are that an unhandled `alert()`/`confirm()` stalls
-the session (and `wait_for`'s timeout will not rescue it), and that a page-initiated reload silently
-drops the session zoom.
+**Known issues are listed in `docs/implementation-plan.md` under "Caveats and known issues."** JS
+dialogs are dismissed automatically and reported in `get_console`, and tool calls are bounded (30s,
+60s for `navigate`, `wait_for` by its own `timeout_ms`) — except `click`, `hover` and delta `scroll`,
+which rod's mouse leaves unbounded.

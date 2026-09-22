@@ -12,7 +12,7 @@ import (
 // element resolves a selector, reporting how many nodes matched so an ambiguous
 // selector is visible in the result rather than a hard error.
 func (s *Session) element(selector string) (*rod.Element, int, error) {
-	els, err := s.page.Elements(selector)
+	els, err := s.Page().Elements(selector)
 	if err != nil {
 		return nil, 0, fmt.Errorf("invalid selector %q: %w", selector, err)
 	}
@@ -78,7 +78,7 @@ func (s *Session) PressKey(combo string) error {
 		keys = append(keys, k)
 	}
 
-	ka := s.page.KeyActions()
+	ka := s.Page().KeyActions()
 	for _, k := range keys[:len(keys)-1] {
 		ka = ka.Press(k)
 	}
@@ -103,7 +103,7 @@ func (s *Session) ScrollToElement(selector string) (int, error) {
 
 // ScrollBy scrolls the page by a pixel delta.
 func (s *Session) ScrollBy(x, y float64) error {
-	if err := s.page.Mouse.Scroll(x, y, 1); err != nil {
+	if err := s.Page().Mouse.Scroll(x, y, 1); err != nil {
 		return fmt.Errorf("scroll failed: %w", err)
 	}
 	return nil

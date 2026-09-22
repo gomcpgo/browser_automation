@@ -13,13 +13,15 @@ import (
 // Handler implements the MCP protocol for browser automation. It owns the one
 // persistent session shared by every tool call.
 type Handler struct {
-	mu      sync.Mutex
-	session *browser.Session
+	mu         sync.Mutex
+	session    *browser.Session
+	chromePath string
 }
 
-// New creates a handler with no session started yet.
-func New() *Handler {
-	return &Handler{}
+// New creates a handler with no session started yet. An empty chromePath lets
+// rod auto-detect the browser.
+func New(chromePath string) *Handler {
+	return &Handler{chromePath: chromePath}
 }
 
 // ListTools returns the available tools.

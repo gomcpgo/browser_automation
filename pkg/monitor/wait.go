@@ -35,17 +35,25 @@ func Wait(ctx context.Context, m *Monitor, eval EvalBool, p WaitParams) (int, er
 	start := time.Now()
 	deadline := start.Add(time.Duration(p.TimeoutMs) * time.Millisecond)
 
+	timedOut := func() error {
+		return fmt.Errorf("timed out after %dms waiting for %s", p.TimeoutMs, p.Condition)
+	}
+
 	for {
 		ok, err := check()
 		if err != nil {
+			// A blocked page (a modal JS dialog, say) fails the poll rather than
+			// answering it. Past the deadline that is a timeout, not a new error.
+			if time.Now().After(deadline) {
+				return int(time.Since(start).Milliseconds()), timedOut()
+			}
 			return int(time.Since(start).Milliseconds()), err
 		}
 		if ok {
 			return int(time.Since(start).Milliseconds()), nil
 		}
 		if time.Now().After(deadline) {
-			return int(time.Since(start).Milliseconds()), fmt.Errorf(
-				"timed out after %dms waiting for %s", p.TimeoutMs, p.Condition)
+			return int(time.Since(start).Milliseconds()), timedOut()
 		}
 
 		select {
