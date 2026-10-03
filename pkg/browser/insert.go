@@ -3,6 +3,7 @@ package browser
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/go-rod/rod/lib/proto"
@@ -17,6 +18,11 @@ const (
 
 // maxInsertEcho caps the element text echoed back after an insert.
 const maxInsertEcho = 2000
+
+const (
+	clearSettleTimeout = 1 * time.Second
+	clearSettleDelay   = 100 * time.Millisecond
+)
 
 const selectAllJS = `() => {
 	if (typeof this.select === 'function' && 'value' in this) { this.select(); return; }
@@ -67,6 +73,20 @@ func (s *Session) InsertText(selector, text, newline string, clear bool) (*Inser
 		}
 		if err := s.PressKey("Backspace"); err != nil {
 			return nil, fmt.Errorf("failed to clear %q: %w", selector, err)
+		}
+		// Framework editors (Lexical, ProseMirror) reconcile the deletion
+		// asynchronously; an insertText that lands mid-reconcile is dropped.
+		// Wait until the editor reads empty, let it settle, and re-focus.
+		deadline := time.Now().Add(clearSettleTimeout)
+		for time.Now().Before(deadline) {
+			if txt, err := el.Text(); err == nil && strings.TrimSpace(txt) == "" {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		time.Sleep(clearSettleDelay)
+		if err := el.Focus(); err != nil {
+			return nil, fmt.Errorf("failed to re-focus %q after clearing: %w", selector, err)
 		}
 	}
 

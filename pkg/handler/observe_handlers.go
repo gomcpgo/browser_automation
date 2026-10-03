@@ -9,6 +9,10 @@ import (
 	"github.com/gomcpgo/mcp/pkg/protocol"
 )
 
+// maxConsoleLine caps one rendered console entry; real apps log multi-kilobyte
+// error objects that would otherwise swamp the response.
+const maxConsoleLine = 4000
+
 func (h *Handler) handleWaitFor(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResponse, error) {
 	sess, err := h.requireSession()
 	if err != nil {
@@ -109,7 +113,11 @@ func (h *Handler) handleGetConsole(args map[string]interface{}) (*protocol.CallT
 
 	var b strings.Builder
 	for _, e := range entries {
-		fmt.Fprintf(&b, "[%s] %s\n", e.Level, monitor.RenderArgs(e.Args, 0))
+		line := monitor.RenderArgs(e.Args, 0)
+		if len(line) > maxConsoleLine {
+			line = line[:maxConsoleLine] + "…[truncated]"
+		}
+		fmt.Fprintf(&b, "[%s] %s\n", e.Level, line)
 	}
 	return textResponse(b.String())
 }
