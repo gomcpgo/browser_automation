@@ -46,6 +46,34 @@ func (h *Handler) handleTypeText(args map[string]interface{}) (*protocol.CallToo
 	return jsonResponse(map[string]interface{}{"typed_into": selector, "match_count": count})
 }
 
+func (h *Handler) handleInsertText(args map[string]interface{}) (*protocol.CallToolResponse, error) {
+	sess, err := h.requireSession()
+	if err != nil {
+		return errorResponse(err)
+	}
+	selector, err := reqString(args, "selector")
+	if err != nil {
+		return errorResponse(err)
+	}
+	text, err := optString(args, "text")
+	if err != nil {
+		return errorResponse(err)
+	}
+	newline, err := optString(args, "newline")
+	if err != nil {
+		return errorResponse(err)
+	}
+	clear, err := optBool(args, "clear", false)
+	if err != nil {
+		return errorResponse(err)
+	}
+	result, err := sess.InsertText(selector, text, newline, clear)
+	if err != nil {
+		return errorResponse(err)
+	}
+	return jsonResponse(result)
+}
+
 func (h *Handler) handlePressKey(args map[string]interface{}) (*protocol.CallToolResponse, error) {
 	sess, err := h.requireSession()
 	if err != nil {

@@ -42,6 +42,15 @@
 
   <iframe id="inner" src="frame.html"></iframe>
 
+  <!-- Chat composer: Enter sends, Shift+Enter inserts a line break. Regression
+       fixture for insert_text (fill without sending) and find (no ids/classes). -->
+  <div class="composer-wrap">
+    <div id="composer" contenteditable="true" role="textbox" aria-label="Type a message"
+         data-tab="10" style="min-height: 40px; border: 1px solid #333; padding: 4px; width: 300px;"></div>
+    <button aria-label="Send message" title="Send"><span>Send</span></button>
+    <ul id="sent" aria-label="Sent messages"></ul>
+  </div>
+
   <!-- Below the fold: proves scroll + element screenshot -->
   <div id="tall">
     <h2 id="tall-heading">Below the fold</h2>
@@ -70,6 +79,23 @@
     document.getElementById('reload-btn').addEventListener('click', function () {
       location.reload();
     });
+
+    var composer = document.getElementById('composer');
+    function sendComposer() {
+      var text = composer.innerText.replace(/\n$/, '');
+      if (!text.trim()) return;
+      var li = document.createElement('li');
+      li.textContent = text;
+      document.getElementById('sent').appendChild(li);
+      composer.innerHTML = '';
+    }
+    composer.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendComposer();
+      }
+    });
+    document.querySelector('button[aria-label="Send message"]').addEventListener('click', sendComposer);
 
     document.getElementById('fetch-btn').addEventListener('click', function () {
       fetch('/api/test')

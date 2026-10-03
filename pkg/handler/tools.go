@@ -8,17 +8,36 @@ import (
 
 // GetTools returns the tool definitions exposed over MCP.
 func (h *Handler) GetTools() []protocol.Tool {
-	return []protocol.Tool{
-		{
-			Name: "start_session",
-			Description: "Start a browser session. One browser and one page stay open across all " +
-				"subsequent tool calls, and console/network capture begins immediately, so " +
-				"get_console, get_requests and wait_for see the full history. Call this first. " +
-				"Use zoom (not viewport size) to make screenshots sharper: zoom re-renders the page " +
-				"at that scale, so a 2x zoom element screenshot has 2x the pixels. " +
-				"JavaScript dialogs (alert/confirm/prompt) are dismissed automatically so they cannot " +
-				"block the page; each one is reported in get_console at level warn.",
-			InputSchema: json.RawMessage(`{
+	return h.Tools()
+}
+
+// Tools returns the tool definitions minus the named ones, so a host server
+// can replace start_session / close_session with its own.
+func (h *Handler) Tools(exclude ...string) []protocol.Tool {
+	skip := make(map[string]bool, len(exclude))
+	for _, name := range exclude {
+		skip[name] = true
+	}
+	out := make([]protocol.Tool, 0, len(allTools))
+	for _, t := range allTools {
+		if !skip[t.Name] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+var allTools = []protocol.Tool{
+	{
+		Name: "start_session",
+		Description: "Start a browser session. One browser and one page stay open across all " +
+			"subsequent tool calls, and console/network capture begins immediately, so " +
+			"get_console, get_requests and wait_for see the full history. Call this first. " +
+			"Use zoom (not viewport size) to make screenshots sharper: zoom re-renders the page " +
+			"at that scale, so a 2x zoom element screenshot has 2x the pixels. " +
+			"JavaScript dialogs (alert/confirm/prompt) are dismissed automatically so they cannot " +
+			"block the page; each one is reported in get_console at level warn.",
+		InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"width": {"type": "integer", "description": "Viewport width in CSS pixels (default 1280)"},
@@ -27,31 +46,31 @@ func (h *Handler) GetTools() []protocol.Tool {
 					"zoom": {"type": "number", "description": "Page zoom applied to every page and re-applied after navigation (default 1). 2 renders everything at 2x for sharp captures."}
 				}
 			}`),
-		},
-		{
-			Name:        "close_session",
-			Description: "Close the browser session and discard its console and network buffers.",
-			InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
-		},
-		{
-			Name: "navigate",
-			Description: "Navigate the session page to a URL and wait for the load event. Session " +
-				"zoom is re-applied after the load.",
-			InputSchema: json.RawMessage(`{
+	},
+	{
+		Name:        "close_session",
+		Description: "Close the browser session and discard its console and network buffers.",
+		InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
+	},
+	{
+		Name: "navigate",
+		Description: "Navigate the session page to a URL and wait for the load event. Session " +
+			"zoom is re-applied after the load.",
+		InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"url": {"type": "string", "description": "Absolute URL, e.g. http://localhost:3000/chat"}
 				},
 				"required": ["url"]
 			}`),
-		},
-		{
-			Name: "snapshot",
-			Description: "Compact outline of the visible page: one line per meaningful element with a " +
-				"CSS selector that is verified unique where possible. Far smaller than an " +
-				"accessibility dump. Feed the printed selectors straight into click, type_text, " +
-				"get_element or screenshot.",
-			InputSchema: json.RawMessage(`{
+	},
+	{
+		Name: "snapshot",
+		Description: "Compact outline of the visible page: one line per meaningful element with a " +
+			"CSS selector that is verified unique where possible. Far smaller than an " +
+			"accessibility dump. Feed the printed selectors straight into click, type_text, " +
+			"get_element or screenshot.",
+		InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"selector": {"type": "string", "description": "Scope the outline to this element's subtree (default: whole body)"},
@@ -59,14 +78,14 @@ func (h *Handler) GetTools() []protocol.Tool {
 					"interactive_only": {"type": "boolean", "description": "List only links, buttons, inputs and other interactive elements (default false)"}
 				}
 			}`),
-		},
-		{
-			Name: "get_element",
-			Description: "Inspect one element: text, all attributes, bounds, whether it is actually " +
-				"visible and what is hiding it (display:none, visibility, opacity, zero size or a " +
-				"hidden ancestor), plus any computed styles you ask for. Use this when an element " +
-				"is in the DOM but does not behave as expected.",
-			InputSchema: json.RawMessage(`{
+	},
+	{
+		Name: "get_element",
+		Description: "Inspect one element: text, all attributes, bounds, whether it is actually " +
+			"visible and what is hiding it (display:none, visibility, opacity, zero size or a " +
+			"hidden ancestor), plus any computed styles you ask for. Use this when an element " +
+			"is in the DOM but does not behave as expected.",
+		InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"selector": {"type": "string", "description": "CSS selector. If it matches several elements the first is used and match_count reports the total."},
@@ -74,22 +93,22 @@ func (h *Handler) GetTools() []protocol.Tool {
 				},
 				"required": ["selector"]
 			}`),
-		},
-		{
-			Name:        "click",
-			Description: "Click the first element matching the selector. Scrolls it into view first.",
-			InputSchema: json.RawMessage(`{
+	},
+	{
+		Name:        "click",
+		Description: "Click the first element matching the selector. Scrolls it into view first.",
+		InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"selector": {"type": "string", "description": "CSS selector of the element to click"}
 				},
 				"required": ["selector"]
 			}`),
-		},
-		{
-			Name:        "type_text",
-			Description: "Type text into the first element matching the selector.",
-			InputSchema: json.RawMessage(`{
+	},
+	{
+		Name:        "type_text",
+		Description: "Type text into the first element matching the selector.",
+		InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"selector": {"type": "string", "description": "CSS selector of the input, textarea or contenteditable element"},
@@ -98,35 +117,75 @@ func (h *Handler) GetTools() []protocol.Tool {
 				},
 				"required": ["selector", "text"]
 			}`),
-		},
-		{
-			Name: "press_key",
-			Description: "Press a key or key combination on the focused element, e.g. \"Enter\", " +
-				"\"Escape\", \"Meta+Enter\", \"Control+a\".",
-			InputSchema: json.RawMessage(`{
+	},
+	{
+		Name: "insert_text",
+		Description: "Insert text into an editor where Enter means submit (chat composers, " +
+			"rich-text editors such as Lexical/ProseMirror/Slate) without sending it. Each line " +
+			"is committed as a unit, so any Unicode script arrives intact, and line breaks are " +
+			"sent as Shift+Enter by default. Never presses a trailing Enter: submit afterwards " +
+			"with press_key Enter once you have checked the returned text. Prefer this over " +
+			"type_text for multi-line messages.",
+		InputSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"selector": {"type": "string", "description": "CSS selector of the editor; it is focused first. Use find (role textbox, aria_label, placeholder) to get one."},
+					"text": {"type": "string", "description": "Text to insert; may contain newlines"},
+					"newline": {"type": "string", "enum": ["shift_enter", "enter", "none"], "description": "How to send each newline: shift_enter (default, a soft line break in most chat editors), enter (a key press that may submit), none (newlines become spaces)"},
+					"clear": {"type": "boolean", "description": "Select all and delete existing content first (default false)"}
+				},
+				"required": ["selector", "text"]
+			}`),
+	},
+	{
+		Name: "find",
+		Description: "Locate elements by what a user sees rather than by id or class: visible " +
+			"text, aria-label, ARIA role (explicit or implicit), title or placeholder. Criteria " +
+			"are ANDed and matched case-insensitively as substrings (role is exact). Only the " +
+			"innermost matching elements are returned, each with a selector you can pass to " +
+			"click, insert_text or screenshot. Use this on apps with generated class names.",
+		InputSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"text": {"type": "string", "description": "Visible text substring, e.g. \"Daily Mantras\""},
+					"aria_label": {"type": "string", "description": "aria-label substring, e.g. \"Updates\""},
+					"role": {"type": "string", "description": "Exact ARIA role, explicit or implicit: button, link, textbox, listitem, heading, ..."},
+					"title": {"type": "string", "description": "title attribute substring"},
+					"placeholder": {"type": "string", "description": "placeholder attribute substring"},
+					"within": {"type": "string", "description": "Only search inside this element (CSS selector)"},
+					"visible_only": {"type": "boolean", "description": "Skip elements that are not rendered (default true)"},
+					"max_results": {"type": "integer", "description": "Maximum matches to return (default 10); total reports how many there were"}
+				}
+			}`),
+	},
+	{
+		Name: "press_key",
+		Description: "Press a key or key combination on the focused element, e.g. \"Enter\", " +
+			"\"Escape\", \"Meta+Enter\", \"Control+a\".",
+		InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"key": {"type": "string", "description": "Key name, optionally with modifiers joined by '+': Meta, Control, Shift, Alt plus a key such as Enter, Tab, Escape, ArrowDown or a single character"}
 				},
 				"required": ["key"]
 			}`),
-		},
-		{
-			Name:        "hover",
-			Description: "Move the mouse over the first element matching the selector, to trigger hover states.",
-			InputSchema: json.RawMessage(`{
+	},
+	{
+		Name:        "hover",
+		Description: "Move the mouse over the first element matching the selector, to trigger hover states.",
+		InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"selector": {"type": "string", "description": "CSS selector of the element to hover"}
 				},
 				"required": ["selector"]
 			}`),
-		},
-		{
-			Name: "scroll",
-			Description: "Scroll an element into view, or scroll the page by a pixel delta. Pass either " +
-				"selector or x/y.",
-			InputSchema: json.RawMessage(`{
+	},
+	{
+		Name: "scroll",
+		Description: "Scroll an element into view, or scroll the page by a pixel delta. Pass either " +
+			"selector or x/y.",
+		InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"selector": {"type": "string", "description": "Scroll this element into view"},
@@ -134,15 +193,15 @@ func (h *Handler) GetTools() []protocol.Tool {
 					"y": {"type": "number", "description": "Vertical scroll delta in pixels (positive scrolls down)"}
 				}
 			}`),
-		},
-		{
-			Name: "wait_for",
-			Description: "Wait until a real condition holds, then return the elapsed time. Use this " +
-				"instead of sleeping. Conditions: text_visible / text_gone (needs text), " +
-				"selector_visible / selector_hidden (needs selector), console_matches (needs pattern; " +
-				"searches buffered history too), network_idle (no in-flight requests for idle_ms), " +
-				"js_true (needs js). Set timeout_ms as generously as the operation really needs.",
-			InputSchema: json.RawMessage(`{
+	},
+	{
+		Name: "wait_for",
+		Description: "Wait until a real condition holds, then return the elapsed time. Use this " +
+			"instead of sleeping. Conditions: text_visible / text_gone (needs text), " +
+			"selector_visible / selector_hidden (needs selector), console_matches (needs pattern; " +
+			"searches buffered history too), network_idle (no in-flight requests for idle_ms), " +
+			"js_true (needs js). Set timeout_ms as generously as the operation really needs.",
+		InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"condition": {"type": "string", "enum": ["text_visible", "text_gone", "selector_visible", "selector_hidden", "console_matches", "network_idle", "js_true"], "description": "Which condition to wait for"},
@@ -156,13 +215,13 @@ func (h *Handler) GetTools() []protocol.Tool {
 				},
 				"required": ["condition"]
 			}`),
-		},
-		{
-			Name: "get_console",
-			Description: "Read buffered console output. Logged objects are captured fully serialized, " +
-				"so nested payloads are readable instead of collapsing to \"Object\". Filter by " +
-				"regex pattern, level and age to keep results small.",
-			InputSchema: json.RawMessage(`{
+	},
+	{
+		Name: "get_console",
+		Description: "Read buffered console output. Logged objects are captured fully serialized, " +
+			"so nested payloads are readable instead of collapsing to \"Object\". Filter by " +
+			"regex pattern, level and age to keep results small.",
+		InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"pattern": {"type": "string", "description": "Go regular expression matched against the rendered message"},
@@ -172,13 +231,13 @@ func (h *Handler) GetTools() []protocol.Tool {
 					"expand_depth": {"type": "integer", "description": "How deep to print nested objects before collapsing (default 5)"}
 				}
 			}`),
-		},
-		{
-			Name: "get_requests",
-			Description: "Read buffered network requests with status, timing and, on request, the " +
-				"response body (captured at response time, so it survives navigation). Filter by URL " +
-				"regex, method, status and age instead of dumping everything.",
-			InputSchema: json.RawMessage(`{
+	},
+	{
+		Name: "get_requests",
+		Description: "Read buffered network requests with status, timing and, on request, the " +
+			"response body (captured at response time, so it survives navigation). Filter by URL " +
+			"regex, method, status and age instead of dumping everything.",
+		InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"url_pattern": {"type": "string", "description": "Go regular expression matched against the request URL, e.g. \"/api/chat\""},
@@ -189,27 +248,27 @@ func (h *Handler) GetTools() []protocol.Tool {
 					"max_results": {"type": "integer", "description": "Most recent N matches (default 20)"}
 				}
 			}`),
-		},
-		{
-			Name: "evaluate",
-			Description: "Evaluate a JavaScript expression in the page and return its JSON value. Use " +
-				"it to read application state directly, e.g. app store contents, computed values or " +
-				"element counts.",
-			InputSchema: json.RawMessage(`{
+	},
+	{
+		Name: "evaluate",
+		Description: "Evaluate a JavaScript expression in the page and return its JSON value. Use " +
+			"it to read application state directly, e.g. app store contents, computed values or " +
+			"element counts.",
+		InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"js": {"type": "string", "description": "JS expression, e.g. \"document.querySelectorAll('.message').length\" or \"window.__store.state\""}
 				},
 				"required": ["js"]
 			}`),
-		},
-		{
-			Name: "screenshot",
-			Description: "Write a PNG to an exact absolute path. Capture the viewport, one element " +
-				"(selector) or an explicit rect. Pass zoom to re-render at a higher scale for a sharp " +
-				"crop: zoom 2 on an element gives roughly twice its CSS pixel dimensions. Returns the " +
-				"path written and the image dimensions.",
-			InputSchema: json.RawMessage(`{
+	},
+	{
+		Name: "screenshot",
+		Description: "Write a PNG to an exact absolute path. Capture the viewport, one element " +
+			"(selector) or an explicit rect. Pass zoom to re-render at a higher scale for a sharp " +
+			"crop: zoom 2 on an element gives roughly twice its CSS pixel dimensions. Returns the " +
+			"path written and the image dimensions.",
+		InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"output_path": {"type": "string", "description": "Absolute path of the PNG to write. Parent directories are created."},
@@ -228,6 +287,5 @@ func (h *Handler) GetTools() []protocol.Tool {
 				},
 				"required": ["output_path"]
 			}`),
-		},
-	}
+	},
 }

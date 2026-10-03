@@ -75,16 +75,33 @@ func Element(page *rod.Page, p ElementParams) (*ElementInfo, error) {
 	return &info, nil
 }
 
+// jsSelectorHelper builds a selector for an element, preferring stable
+// attributes over generated class names: #id, then data-testid-style hooks,
+// then aria-label / title / placeholder, then any data-* attribute, then
+// classes, then a structural path. Attribute selectors are tried bare first so
+// results read like [aria-label="Updates"] on pages with scrambled classes.
 const jsSelectorHelper = `
 	const esc = (v) => (window.CSS && CSS.escape) ? CSS.escape(v) : v;
 	const uniq = (s) => { try { return document.querySelectorAll(s).length === 1; } catch (e) { return false; } };
+	const attrSel = (el, a) => {
+		const v = el.getAttribute(a);
+		if (!v || v.length > 200 || /[\n\r]/.test(v)) return null;
+		const s = '[' + a + '="' + v.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]';
+		if (uniq(s)) return s;
+		const ts = el.tagName.toLowerCase() + s;
+		if (uniq(ts)) return ts;
+		return null;
+	};
 	const selFor = (el) => {
 		if (el.id && uniq('#' + esc(el.id))) return '#' + esc(el.id);
-		for (const a of ['data-testid', 'data-test-id', 'data-test', 'name', 'aria-label', 'placeholder']) {
-			const v = el.getAttribute(a);
-			if (v) {
-				const s = el.tagName.toLowerCase() + '[' + a + '="' + v.replace(/"/g, '\\"') + '"]';
-				if (uniq(s)) return s;
+		for (const a of ['data-testid', 'data-test-id', 'data-test', 'name', 'aria-label', 'title', 'placeholder']) {
+			const s = attrSel(el, a);
+			if (s) return s;
+		}
+		for (const attr of el.attributes) {
+			if (attr.name.startsWith('data-')) {
+				const s = attrSel(el, attr.name);
+				if (s) return s;
 			}
 		}
 		const cls = (typeof el.className === 'string')

@@ -22,16 +22,57 @@ type Options struct {
 	ChromePath string
 }
 
-// Session is one persistent browser + page. Console and network listeners are
-// attached at start, so buffers hold history from the very first navigation.
+// Session is one persistent page with console and network listeners attached,
+// so buffers hold history from the moment the session was created.
+//
+// A session either owns its browser (Start launched it, Close kills it) or
+// wraps a page someone else owns (Wrap; Close only detaches the listeners).
 type Session struct {
-	mu       sync.Mutex
-	launcher *launcher.Launcher
-	browser  *rod.Browser
-	page     *rod.Page
-	mon      *monitor.Monitor
-	opts     Options
+	mu         sync.Mutex
+	launcher   *launcher.Launcher
+	browser    *rod.Browser
+	page       *rod.Page
+	mon        *monitor.Monitor
+	opts       Options
+	owned      bool
+	stopEvents context.CancelFunc
 }
+
+// WrapOptions configures a session built around an existing page.
+type WrapOptions struct {
+	// Zoom is the CSS zoom re-applied after navigation and used for
+	// screenshots. Zero means 1, which leaves the page untouched.
+	Zoom float64
+}
+
+// Wrap builds a session around a page owned by the caller, for example one tab
+// of a browser that must outlive this process. It attaches the console,
+// network and dialog listeners and applies no viewport override. Close detaches
+// the listeners and never closes the page or its browser.
+func Wrap(page *rod.Page, opts WrapOptions) (*Session, error) {
+	if page == nil {
+		return nil, fmt.Errorf("cannot wrap a nil page")
+	}
+	if opts.Zoom <= 0 {
+		opts.Zoom = 1
+	}
+
+	s := &Session{
+		page:  page,
+		mon:   monitor.New(),
+		opts:  Options{Headed: true, Zoom: opts.Zoom},
+		owned: false,
+	}
+	if err := s.attachListeners(); err != nil {
+		s.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// Owned reports whether Close will shut the browser down (true) or only
+// detach from a page owned elsewhere (false).
+func (s *Session) Owned() bool { return s.owned }
 
 // Start launches Chrome and opens the single page used by the session.
 func Start(opts Options) (*Session, error) {
@@ -86,6 +127,7 @@ func Start(opts Options) (*Session, error) {
 		page:     page,
 		mon:      monitor.New(),
 		opts:     opts,
+		owned:    true,
 	}
 
 	if err := s.attachListeners(); err != nil {
@@ -96,10 +138,21 @@ func Start(opts Options) (*Session, error) {
 	return s, nil
 }
 
-// Close shuts down the browser.
+// Close shuts down the browser of an owned session. For a wrapped session it
+// only stops the event listeners; the page and browser are left exactly as
+// they are.
 func (s *Session) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.stopEvents != nil {
+		s.stopEvents()
+		s.stopEvents = nil
+	}
+	if !s.owned {
+		s.page = nil
+		return nil
+	}
 
 	var err error
 	if s.browser != nil {
@@ -139,10 +192,12 @@ func (s *Session) Zoom() float64 { return s.opts.Zoom }
 // Info returns the session settings and the current page URL and title.
 func (s *Session) Info() map[string]interface{} {
 	info := map[string]interface{}{
-		"width":  s.opts.Width,
-		"height": s.opts.Height,
 		"headed": s.opts.Headed,
 		"zoom":   s.opts.Zoom,
+	}
+	if s.opts.Width > 0 && s.opts.Height > 0 {
+		info["width"] = s.opts.Width
+		info["height"] = s.opts.Height
 	}
 	if pi, err := s.page.Info(); err == nil {
 		info["url"] = pi.URL

@@ -17,7 +17,7 @@ func (s *Session) element(selector string) (*rod.Element, int, error) {
 		return nil, 0, fmt.Errorf("invalid selector %q: %w", selector, err)
 	}
 	if len(els) == 0 {
-		return nil, 0, fmt.Errorf("no element matches %q", selector)
+		return nil, 0, fmt.Errorf("no element matches %q; try find with text or aria_label to get a selector", selector)
 	}
 	return els[0], len(els), nil
 }

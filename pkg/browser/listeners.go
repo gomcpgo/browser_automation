@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -39,7 +40,12 @@ func (s *Session) attachListeners() error {
 		return fmt.Errorf("failed to enable page events: %w", err)
 	}
 
-	go s.page.EachEvent(
+	// The event pump runs until Close cancels it, so a wrapped session can
+	// detach from a page without touching the page itself.
+	ctx, cancel := context.WithCancel(context.Background())
+	s.stopEvents = cancel
+
+	go s.page.Context(ctx).EachEvent(
 		func(e *proto.RuntimeBindingCalled) {
 			if e.Name == consoleBinding {
 				s.onConsolePayload(e.Payload)

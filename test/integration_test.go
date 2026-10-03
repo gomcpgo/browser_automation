@@ -416,3 +416,144 @@ func TestToolsRequireSession(t *testing.T) {
 		t.Fatalf("expected a start_session hint, got %s", msg)
 	}
 }
+
+// TestInsertTextFillsWithoutSending covers chat composers where Enter submits:
+// four lines go in as soft breaks, nothing is sent until an explicit Enter, and
+// one Enter then sends exactly one message carrying all four lines.
+func TestInsertTextFillsWithoutSending(t *testing.T) {
+	h, _ := setup(t)
+
+	verse := "ഓം ഗണപതയേ നമഃ\nശ്രീ ഹനുമതേ നമഃ\nബുദ്ധിർബലം യശോ ധൈര്യം\nനിർഭയത്വമരോഗതാ"
+	res := decode(t, call(t, h, "insert_text", map[string]interface{}{
+		"selector": "#composer", "text": verse,
+	}))
+	if n, _ := res["lines_inserted"].(float64); n != 4 {
+		t.Fatalf("expected 4 lines inserted, got %v", res["lines_inserted"])
+	}
+	echo, _ := res["text"].(string)
+	if len(strings.Split(strings.TrimSpace(echo), "\n")) != 4 {
+		t.Fatalf("expected 4 lines in the composer, got %q", echo)
+	}
+	if !strings.Contains(echo, "ഹനുമതേ") {
+		t.Fatalf("Malayalam text did not survive insertion: %q", echo)
+	}
+
+	sent := decode(t, call(t, h, "evaluate", map[string]interface{}{
+		"js": "document.querySelectorAll('#sent li').length",
+	}))
+	if sent["value"] != float64(0) {
+		t.Fatalf("insert_text must not send; %v messages were sent", sent["value"])
+	}
+
+	call(t, h, "press_key", map[string]interface{}{"key": "Enter"})
+	sent = decode(t, call(t, h, "evaluate", map[string]interface{}{
+		"js": "document.querySelectorAll('#sent li').length",
+	}))
+	if sent["value"] != float64(1) {
+		t.Fatalf("expected exactly one message after Enter, got %v", sent["value"])
+	}
+	body := decode(t, call(t, h, "evaluate", map[string]interface{}{
+		"js": "document.querySelector('#sent li').textContent",
+	}))
+	if got, _ := body["value"].(string); len(strings.Split(got, "\n")) != 4 || !strings.Contains(got, "ധൈര്യം") {
+		t.Fatalf("sent message lost its lines: %q", got)
+	}
+
+	// clear replaces whatever is there; newline "none" flattens.
+	call(t, h, "insert_text", map[string]interface{}{"selector": "#composer", "text": "old"})
+	res = decode(t, call(t, h, "insert_text", map[string]interface{}{
+		"selector": "#composer", "text": "a\nb", "clear": true, "newline": "none",
+	}))
+	if echo, _ := res["text"].(string); strings.TrimSpace(echo) != "a b" {
+		t.Fatalf("expected cleared, flattened text, got %q", echo)
+	}
+
+	msg := callExpectingError(t, h, "insert_text", map[string]interface{}{
+		"selector": "#composer", "text": "x", "newline": "tab",
+	})
+	if !strings.Contains(msg, "newline must be") {
+		t.Fatalf("unexpected error for a bad newline mode: %s", msg)
+	}
+}
+
+// TestFindByTextLabelAndRole covers locating elements on pages without stable
+// ids or classes; every returned selector must resolve to exactly one element.
+func TestFindByTextLabelAndRole(t *testing.T) {
+	h, _ := setup(t)
+
+	assertUnique := func(sel string) {
+		t.Helper()
+		res := decode(t, call(t, h, "get_element", map[string]interface{}{"selector": sel}))
+		if count, _ := res["match_count"].(float64); count != 1 {
+			t.Fatalf("selector %q matched %v elements", sel, count)
+		}
+	}
+
+	byLabel := decode(t, call(t, h, "find", map[string]interface{}{"aria_label": "send message"}))
+	matches, _ := byLabel["matches"].([]interface{})
+	if len(matches) != 1 {
+		t.Fatalf("expected one aria-label match, got %v", byLabel)
+	}
+	m := matches[0].(map[string]interface{})
+	if m["tag"] != "button" || m["role"] != "button" || m["name"] != "Send message" {
+		t.Fatalf("unexpected aria-label match: %v", m)
+	}
+	sel, _ := m["selector"].(string)
+	if !strings.Contains(sel, `aria-label="Send message"`) {
+		t.Fatalf("expected an aria-label based selector, got %q", sel)
+	}
+	assertUnique(sel)
+
+	// Text search returns the innermost element, not every ancestor.
+	byText := decode(t, call(t, h, "find", map[string]interface{}{"text": "toggle dropdown"}))
+	matches, _ = byText["matches"].([]interface{})
+	if len(matches) != 1 {
+		t.Fatalf("expected one innermost text match, got %v", byText)
+	}
+	m = matches[0].(map[string]interface{})
+	if m["selector"] != "#toggle-dropdown" {
+		t.Fatalf("expected the button itself, got %v", m)
+	}
+
+	// Role, explicit and implicit, combined with another criterion.
+	byRole := decode(t, call(t, h, "find", map[string]interface{}{"role": "textbox", "aria_label": "message"}))
+	matches, _ = byRole["matches"].([]interface{})
+	if len(matches) != 1 || matches[0].(map[string]interface{})["selector"] != "#composer" {
+		t.Fatalf("expected the composer by role+label, got %v", byRole)
+	}
+	implicit := decode(t, call(t, h, "find", map[string]interface{}{"role": "textbox", "placeholder": "your name"}))
+	matches, _ = implicit["matches"].([]interface{})
+	if len(matches) != 1 || matches[0].(map[string]interface{})["selector"] != "#name-input" {
+		t.Fatalf("expected the input by implicit role, got %v", implicit)
+	}
+
+	// Hidden elements are skipped unless asked for.
+	hidden := call(t, h, "find", map[string]interface{}{"text": "Dropdown contents"})
+	if !strings.Contains(hidden, "no elements matched") {
+		t.Fatalf("hidden element should be skipped by default: %s", hidden)
+	}
+	shown := decode(t, call(t, h, "find", map[string]interface{}{"text": "Dropdown contents", "visible_only": false}))
+	matches, _ = shown["matches"].([]interface{})
+	if len(matches) != 1 || matches[0].(map[string]interface{})["visible"] != false {
+		t.Fatalf("expected the hidden dropdown with visible=false, got %v", shown)
+	}
+
+	// Scoping and the max_results/total split.
+	scoped := decode(t, call(t, h, "find", map[string]interface{}{"role": "button", "within": ".composer-wrap"}))
+	if scoped["total"] != float64(1) {
+		t.Fatalf("expected one button inside the composer wrapper, got %v", scoped)
+	}
+	limited := decode(t, call(t, h, "find", map[string]interface{}{"role": "button", "max_results": float64(2)}))
+	matches, _ = limited["matches"].([]interface{})
+	if total, _ := limited["total"].(float64); total < 3 || len(matches) != 2 {
+		t.Fatalf("expected total >= 3 with 2 returned, got %v", limited)
+	}
+	for _, item := range matches {
+		assertUnique(item.(map[string]interface{})["selector"].(string))
+	}
+
+	msg := callExpectingError(t, h, "find", map[string]interface{}{})
+	if !strings.Contains(msg, "at least one") {
+		t.Fatalf("unexpected error for empty criteria: %s", msg)
+	}
+}
